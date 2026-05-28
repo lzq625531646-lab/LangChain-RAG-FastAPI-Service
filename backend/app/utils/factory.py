@@ -106,7 +106,7 @@ class EmbedModelFactory(BaseModelFactory):
     """嵌入模型工厂 - 支持Ollama和阿里云百炼"""
     def generator(self) -> Optional[Embeddings | BaseChatModel]:
         """根据EMBED_MODEL_TYPE生成对应的嵌入模型"""
-        embed_type = os.getenv("EMBED_MODEL_TYPE", "OLLAMA").upper()
+        embed_type = os.getenv("EMBED_MODEL_TYPE", "ALIYUN").upper()
         
         if embed_type == "OLLAMA":
             model_name = os.getenv("TEXT_EMBEDDING_MODEL_NAME", "qwen3-embedding:0.6b")

@@ -1,8 +1,8 @@
 import asyncio
 import time
 import json
-import magic
 import os
+import subprocess
 import tempfile
 from typing import List, Optional, Dict, Any, AsyncGenerator
 from dataclasses import dataclass
@@ -25,6 +25,22 @@ ALLOWED_MIME_TYPES = {
 }
 MAX_FILE_SIZE = 20 * 1024 * 1024
 MAX_FOLDER_SIZE = 200 * 1024 * 1024
+
+
+def detect_mime_type(content: bytes) -> str:
+    try:
+        import magic
+
+        mime = magic.Magic(mime=True)
+        return mime.from_buffer(content)
+    except ImportError:
+        result = subprocess.run(
+            ["/usr/bin/file", "--mime-type", "-b", "-"],
+            input=content,
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout.decode().strip()
 
 
 @dataclass
@@ -94,8 +110,7 @@ class KnowledgeService:
         content = await file.read()
         await file.seek(0)
 
-        mime = magic.Magic(mime=True)
-        file_type = mime.from_buffer(content)
+        file_type = detect_mime_type(content)
 
         file_extension = os.path.splitext(file.filename)[1].lower()
 
@@ -249,7 +264,6 @@ class KnowledgeService:
             logger.error(f"【SSE上传】文件总大小超过限制，总大小: {total_size / (1024 * 1024):.2f}MB，限制: 200MB")
             return [], [self._yield_size_error_event()], total_files
 
-        mime = magic.Magic(mime=True)
         valid_files = []
         current_index = 1
         failed_count = 0
@@ -257,7 +271,7 @@ class KnowledgeService:
         for file_info in files_content:
             file = file_info['file']
             content = file_info['content']
-            file_type = mime.from_buffer(content)
+            file_type = detect_mime_type(content)
             file_extension = os.path.splitext(file.filename)[1].lower()
 
             if file_type not in ALLOWED_MIME_TYPES and file_extension not in ALLOWED_EXTENSIONS:

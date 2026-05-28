@@ -1,4 +1,5 @@
 import time
+import os
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, Request
@@ -80,12 +81,26 @@ async def startup_event():
     await connect_redis()
     logger.info("Redis连接初始化完成")
     
-    # 检查并重排序模型
-    check_and_download_reranker_model()
-    logger.info("重排序模型检查完成")
+    if os.getenv("SKIP_RERANKER_MODEL_CHECK", "false").lower() != "true":
+        # 检查并重排序模型
+        check_and_download_reranker_model()
+        logger.info("重排序模型检查完成")
+    else:
+        logger.info("已跳过重排序模型检查")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时关闭Redis连接"""
     await close_redis()
     logger.info("Redis连接已关闭")
+
+
+def main():
+    """PyCharm debug entrypoint."""
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)
+
+
+if __name__ == "__main__":
+    main()
