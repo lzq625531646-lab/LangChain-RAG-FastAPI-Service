@@ -1,9 +1,10 @@
 import asyncio
+from typing import Any
+
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_community.retrievers import BM25Retriever
-from langchain_classic.retrievers import EnsembleRetriever
 
 from app.utils.config import chroma_config
 
@@ -15,6 +16,31 @@ class HybridRetriever:
 
     def __init__(self, vectors_store: Chroma):
         self.vectors_store = vectors_store
+
+    @staticmethod
+    def _document_key(document: Document) -> str:
+        source = document.metadata.get("source") or document.metadata.get("filename") or ""
+        md5 = document.metadata.get("md5") or ""
+        return f"{source}:{md5}:{document.page_content}"
+
+    @classmethod
+    def _weighted_rank_fusion(
+        cls,
+        ranked_results: list[tuple[list[Document], float]],
+        limit: int,
+        c: int = 60,
+    ) -> list[Document]:
+        scores: dict[str, float] = {}
+        documents: dict[str, Document] = {}
+
+        for docs, weight in ranked_results:
+            for rank, document in enumerate(docs, start=1):
+                key = cls._document_key(document)
+                documents.setdefault(key, document)
+                scores[key] = scores.get(key, 0.0) + weight / (rank + c)
+
+        ordered_keys = sorted(scores, key=scores.get, reverse=True)
+        return [documents[key] for key in ordered_keys[:limit]]
 
     async def get_bm25_retriever(self, user_id: str = None):
         """
@@ -59,12 +85,12 @@ class HybridRetriever:
             documents.append(Document(page_content=doc, metadata=metadata))
         return documents
 
-    async def get_retriever(self, query: str = None, user_id: str = None) -> BaseRetriever:
+    async def get_retriever(self, query: str = None, user_id: str = None) -> Runnable[str, list[Document]]:
         """
         获取混合检索器（BM25 + 向量检索）
         :param query: 查询语句，用于动态调整权重
         :param user_id: 用户ID，用于过滤用户的文档，为空时不返回任何文档
-        :return: EnsembleRetriever实例或单独的向量检索器
+        :return: Runnable检索器
         """
         if not user_id:
             return EmptyRetriever()
@@ -78,13 +104,19 @@ class HybridRetriever:
 
         if bm25_retriever:
             weights = await self.get_dynamic_weights(query)
-            ensemble_retriever = EnsembleRetriever(
-                retrievers=[vector_retriever, bm25_retriever],
-                weights=weights
-            )
-            return ensemble_retriever
-        else:
-            return vector_retriever
+
+            async def hybrid_search(search_query: str, config: dict[str, Any] | None = None) -> list[Document]:
+                vector_task = vector_retriever.ainvoke(search_query, config=config)
+                bm25_task = bm25_retriever.ainvoke(search_query, config=config)
+                vector_docs, bm25_docs = await asyncio.gather(vector_task, bm25_task)
+                return self._weighted_rank_fusion(
+                    [(vector_docs, weights[0]), (bm25_docs, weights[1])],
+                    limit=chroma_config['k'],
+                )
+
+            return RunnableLambda(hybrid_search)
+
+        return vector_retriever
 
     @staticmethod
     async def get_dynamic_weights(query: str = None):

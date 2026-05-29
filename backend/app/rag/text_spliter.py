@@ -1,7 +1,7 @@
 import math
 import asyncio
 from typing import List, Optional, Any
-from langchain.embeddings.base import Embeddings
+from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.utils.config import chroma_config
@@ -119,6 +119,9 @@ class AsyncTextSplitter:
         Returns:
             List[str]: 优化后的文本片段列表
         """
+        if not chunks:
+            return []
+
         optimized_chunks = []
         current_chunk = chunks[0]
         
@@ -163,6 +166,9 @@ class AsyncTextSplitter:
         Returns:
             List[str]: 优化后的文本片段列表
         """
+        if not chunks:
+            return []
+
         optimized_chunks = []
         current_chunk = chunks[0]
         
@@ -196,8 +202,10 @@ class AsyncTextSplitter:
         if not self.embedding_model:
             return 0.0
         
-        embedding1 = self.embedding_model.embed_query(text1)
-        embedding2 = self.embedding_model.embed_query(text2)
+        embedding1, embedding2 = await asyncio.gather(
+            asyncio.to_thread(self.embedding_model.embed_query, text1),
+            asyncio.to_thread(self.embedding_model.embed_query, text2),
+        )
         
         # 计算余弦相似度
         similarity = self._cosine_similarity(embedding1, embedding2)

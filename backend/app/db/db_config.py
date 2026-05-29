@@ -4,9 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy import text
 from sqlalchemy.engine import URL
 from app.models.chat_history import Base
+from app.core.logger_handler import get_logger
 
 # 加载环境变量
 load_dotenv()
+logger = get_logger(__name__)
 
 # 数据库URL
 ASYNC_DATABSE_URL = URL.create(
@@ -24,7 +26,7 @@ async_engine = create_async_engine(
     ASYNC_DATABSE_URL,
     pool_size=10, # 连接池中保持的持久连接数
     max_overflow=20, # 连接池中允许创建的额外连接数
-    echo=True # 输出sql日志
+    echo=os.getenv("SQL_ECHO", "false").lower() == "true" # 输出sql日志
 )
 
 # 创建异步会话工厂
@@ -40,6 +42,7 @@ async def init_db():
         # 先删除旧表，然后创建新表
         # await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+    logger.info("数据库表初始化完成，database=%s host=%s", os.getenv("MYSQL_DATABASE", "chat_history"), os.getenv("MYSQL_HOST", "localhost"))
 
 # 依赖项
 async def get_db():
@@ -64,7 +67,8 @@ async def check_mysql_connection() -> bool:
         async with async_engine.connect() as conn:
             # 执行简单查询
             await conn.execute(text("SELECT 1"))
+        logger.info("MySQL连接检查成功")
         return True
     except Exception as e:
-        print(f"MySQL连接失败: {e}")
+        logger.exception("MySQL连接失败: %s", e)
         return False

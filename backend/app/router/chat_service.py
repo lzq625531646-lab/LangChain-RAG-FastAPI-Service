@@ -19,7 +19,7 @@ class ChatService:
 
         history = await sm.session_manager.get_history(session_id, user_id)
 
-        result = await get_agent_response(query, history)
+        result = await get_agent_response(query, history, user_id=user_id)
         response = result.get("response")
         steps = result.get("steps", [])
 
@@ -66,7 +66,11 @@ class ChatService:
             result = await reorder_service.reorder_documents(query, documents)
 
             if result["success"]:
-                logger.info(f"【重排序结果】查询: {query} 排序结果: {[f'文档 {doc['document']}: {doc['similarity']:.4f}' for doc in result['documents']]}")
+                sorted_preview = [
+                    f"文档 {doc['document']}: {doc['similarity']:.4f}"
+                    for doc in result["documents"]
+                ]
+                logger.info(f"【重排序结果】查询: {query} 排序结果: {sorted_preview}")
                 return result["documents"]
             else:
                 logger.warning(f"【重排序失败】{result['error']}")

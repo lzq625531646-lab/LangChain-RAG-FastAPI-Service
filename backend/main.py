@@ -1,8 +1,7 @@
-import time
 import os
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from app.db.db_config import init_db
@@ -17,6 +16,7 @@ from app.services.database_session_manager import init_database_session_manager
 from app.core.failed_response_register import register_exception_handlers
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.logger_handler import logger
+from app.core.logging_middleware import RequestLoggingMiddleware
 
 from app.rag.reorder_service import check_and_download_reranker_model
 
@@ -28,13 +28,8 @@ app = FastAPI()
 # 集成限流中间件
 app.add_middleware(RateLimitMiddleware, limit=100, window=60) # 每分钟100个请求
 
-@app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(round(process_time, 4))
-    return response
+# 集成请求日志中间件：写入 access.log，并注入 request_id / 耗时等上下文
+app.add_middleware(RequestLoggingMiddleware)
 
 # 集成API路由
 app.include_router(chat_router)

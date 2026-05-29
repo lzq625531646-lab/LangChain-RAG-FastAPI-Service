@@ -1,5 +1,4 @@
 import re
-import logging
 import traceback
 from typing import List, Dict
 
@@ -9,6 +8,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette import status
 from pydantic_settings import BaseSettings
+
+from app.core.logger_handler import get_logger
 
 
 class Settings(BaseSettings):
@@ -30,29 +31,7 @@ settings = Settings()
 # 生产环境强制关闭 DEBUG_MODE，双保险防止泄露
 DEBUG_MODE = settings.DEBUG_MODE if settings.ENV != "prod" else False
 
-def setup_logger():
-    """初始化项目日志器"""
-    logger = logging.getLogger("app")
-    logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
-
-    # 避免重复添加handler
-    if logger.handlers:
-        return logger
-
-    # 控制台日志格式
-    formatter = logging.Formatter(
-        fmt="%(asctime)s - %(name)s - %(levelname)s - [%(path)s] - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    return logger
-
-
-logger = setup_logger()
+logger = get_logger(__name__)
 
 
 class BusinessException(Exception):
@@ -197,7 +176,7 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
     logger.error(
         f"数据库约束异常: {detail}",
         extra={"path": str(request.url), "method": request.method},
-        exc_info=exc
+        exc_info=True
     )
 
     return JSONResponse(
@@ -221,7 +200,7 @@ async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
     logger.error(
         f"数据库操作异常",
         extra={"path": str(request.url), "method": request.method},
-        exc_info=exc
+        exc_info=True
     )
 
     return JSONResponse(
@@ -245,7 +224,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     logger.critical(
         f"未捕获系统异常",
         extra={"path": str(request.url), "method": request.method},
-        exc_info=exc  # 这个参数会把完整堆栈打到日志里，生产环境排错全靠它
+        exc_info=True  # 这个参数会把完整堆栈打到日志里，生产环境排错全靠它
     )
 
     return JSONResponse(

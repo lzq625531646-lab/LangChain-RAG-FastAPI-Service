@@ -174,7 +174,7 @@ class DocumentProcessor:
                     doc.metadata['original_filename'] = filename
                     doc.metadata['md5'] = md5_hex
 
-                await asyncio.to_thread(self.vectors_store.add_documents, document)
+                await self.vectors_store.aadd_documents(document)
 
                 original_filename = file_names.get(file_path, filename) if files else filename
                 await self.md5_store.save_md5_hex(md5_hex, filename, original_filename, user_id)

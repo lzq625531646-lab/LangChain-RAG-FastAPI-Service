@@ -3,12 +3,16 @@ from typing import Optional, List
 import os
 from dotenv import load_dotenv
 
-from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 
 from app.core.logger_handler import logger
+
+try:
+    from langchain_dashscope import ChatTongyi
+except Exception:
+    from langchain_community.chat_models.tongyi import ChatTongyi
 
 # 加载环境变量
 load_dotenv()

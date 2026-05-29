@@ -2,19 +2,24 @@ import os
 import json
 import asyncio
 from langsmith import traceable
-from typing import List, Optional, AsyncGenerator
+from typing import Any, List, Optional, AsyncGenerator
 
-from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
-from langchain_community.chat_models import ChatTongyi
+from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
-from langchain_core.messages import BaseMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
+
+try:
+    from langchain_dashscope import ChatTongyi
+except Exception:
+    from langchain_community.chat_models import ChatTongyi
 
 from app.agent.agent_middleware import get_middleware
 from app.agent.agent_tools import rag_summary_tools, get_weather_tools, what_time_is_now, get_user_info_tools, \
     reorder_documents_tools, set_current_user_id, set_current_user_token, set_thinking_callback, get_sales_volume
 from app.core.logger_handler import logger
+from app.core.request_context import set_user_context
 from app.services import session_manager as sm
 from app.utils.prompt_loader import load_prompt
 
@@ -23,7 +28,7 @@ class AgentFactory:
     """
     生产 Agent 工厂类
     支持：
-    - 每次调用创建全新的 AgentExecutor 实例
+    - 每次调用创建全新的 LangChain v1 Agent Runnable
     - 动态注入工具、提示词、模型配置
     - 支持异步流式调用
     """
@@ -105,15 +110,6 @@ class AgentFactory:
         else:
             raise ValueError(f"不支持的LLM_TYPE: {llm_type}，可选值: ALIYUN, OLLAMA")
 
-    def _create_prompt(self, custom_system_prompt: Optional[str] = None) -> ChatPromptTemplate:
-        """内部方法：创建提示词模板"""
-        return ChatPromptTemplate.from_messages([
-            ("system", "{system_prompt}"),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
-
     def create_agent_executor(
             self,
             custom_tools: Optional[List[BaseTool]] = None,
@@ -122,34 +118,28 @@ class AgentFactory:
             verbose: bool = True,
             return_intermediate_steps: bool = True,
             **kwargs
-    ) -> AgentExecutor:
+    ) -> Runnable:
         """
-        核心工厂方法：创建全新的 AgentExecutor 实例
+        核心工厂方法：创建全新的 LangChain v1 Agent 实例
         每次调用都会生成新的实例，彻底避免全局状态污染
 
         :param custom_tools: 自定义工具列表（覆盖默认）
         :param custom_model: 自定义模型（覆盖默认）
         :param custom_system_prompt: 自定义系统提示词（覆盖默认）
-        :param verbose: 是否打印详细日志
-        :param return_intermediate_steps: 是否返回中间步骤
-        :param kwargs: 其他 AgentExecutor 参数
-        :return: 全新的 AgentExecutor 实例
+        :param verbose: 保留参数，兼容旧调用方
+        :param return_intermediate_steps: 保留参数，兼容旧调用方
+        :param kwargs: 其他 create_agent 参数
+        :return: 全新的 Agent Runnable 实例
         """
-        # 1. 创建组件（每次都重新创建，避免全局状态污染）
         chat_model = self._create_chat_model(custom_model)
-        prompt = self._create_prompt()
         tools = custom_tools or self.default_tools
         system_prompt = custom_system_prompt or self.default_system_prompt
 
-        # 2. 创建 Agent
-        agent = create_tool_calling_agent(chat_model, tools, prompt)
-
-        # 3. 创建 Executor
-        return AgentExecutor(
-            agent=agent,
+        return create_agent(
+            model=chat_model,
             tools=tools,
-            verbose=verbose,
-            return_intermediate_steps=return_intermediate_steps,
+            system_prompt=system_prompt,
+            middleware=self.default_middleware,
             **kwargs
         )
 
@@ -160,10 +150,55 @@ agent_factory = AgentFactory()
 
 def get_agent_executor():
     """
-    获取AgentExecutor实例，用于LangGraph
-    :return: AgentExecutor实例
+    获取Agent Runnable实例，用于LangGraph
+    :return: Agent Runnable实例
     """
     return agent_factory.create_agent_executor()
+
+
+def _build_messages(query: str, history: Optional[List[tuple]] = None) -> List[BaseMessage]:
+    """将项目里的二元组历史转换成 LangChain v1 messages 输入。"""
+    messages: List[BaseMessage] = []
+    if history:
+        for user_msg, assistant_msg in history:
+            messages.append(HumanMessage(content=user_msg))
+            messages.append(AIMessage(content=assistant_msg))
+    messages.append(HumanMessage(content=query))
+    return messages
+
+
+def _extract_response(agent_output: dict[str, Any]) -> str:
+    messages = agent_output.get("messages", [])
+    for message in reversed(messages):
+        if isinstance(message, AIMessage) and message.content:
+            return str(message.content)
+    return "抱歉，我无法理解您的请求。"
+
+
+def _extract_steps(agent_output: dict[str, Any]) -> List[dict[str, Any]]:
+    steps = []
+    for message in agent_output.get("messages", []):
+        if isinstance(message, AIMessage) and getattr(message, "tool_calls", None):
+            for tool_call in message.tool_calls:
+                steps.append({
+                    "thought": "",
+                    "tool": tool_call.get("name"),
+                    "tool_input": tool_call.get("args", {}),
+                    "tool_output": ""
+                })
+        elif isinstance(message, ToolMessage):
+            for step in reversed(steps):
+                if step.get("tool_output") == "":
+                    step["tool_output"] = str(message.content)
+                    break
+    return steps
+
+
+def _log_tool_steps(prefix: str, steps: List[dict[str, Any]]) -> None:
+    for step in steps:
+        logger.info(f"\n\n{prefix} [调用工具] {step.get('tool')}")
+        logger.info(f"{prefix} [工具输入] {step.get('tool_input')}")
+        logger.info(f"{prefix} [工具结果] {step.get('tool_output')}\n")
 
 
 async def get_agent_response(
@@ -185,6 +220,7 @@ async def get_agent_response(
     """
     if user_id:
         set_current_user_id(user_id)
+        set_user_context(user_id=user_id)
     if token:
         set_current_user_token(token)
 
@@ -192,45 +228,17 @@ async def get_agent_response(
         # 1. 从工厂获取全新的 Executor 实例
         agent_executor = agent_factory.create_agent_executor(custom_tools=custom_tools, **kwargs)
 
-        # 2. 构建聊天历史
-        chat_history: List[BaseMessage] = []
-        if history:
-            from langchain_core.messages import HumanMessage, AIMessage
-            for user_msg, assistant_msg in history:
-                chat_history.append(HumanMessage(content=user_msg))
-                chat_history.append(AIMessage(content=assistant_msg))
-
-        # 3. 流式执行
-        full_response = []
-        steps = []
-        tool_called = False
-        async for chunk in agent_executor.astream({
-            "input": query,
-            "chat_history": chat_history,
-            "system_prompt": agent_factory.default_system_prompt
-        }):
-            if "output" in chunk:
-                full_response.append(chunk["output"])
-            elif "intermediate_steps" in chunk:
-                for action, observation in chunk["intermediate_steps"]:
-                    tool_called = True
-                    # 记录日志
-                    logger.info(f"\n\n🧠 [Agent 思考] {action.log}")
-                    logger.info(f"🛠️ [调用工具] {action.tool}")
-                    logger.info(f"📥 [工具输入] {action.tool_input}")
-                    logger.info(f"📤 [工具结果] {observation}\n")
-                    # 收集步骤
-                    steps.append({
-                        "thought": action.log,
-                        "tool": action.tool,
-                        "tool_input": action.tool_input,
-                        "tool_output": observation
-                    })
-        if not tool_called:
+        agent_output = await agent_executor.ainvoke({
+            "messages": _build_messages(query, history)
+        })
+        steps = _extract_steps(agent_output)
+        if not steps:
             logger.info("【Agent响应】本轮未调用任何工具")
+        else:
+            _log_tool_steps("【Agent响应】", steps)
 
         return {
-            "response": "".join(full_response) if full_response else "抱歉，我无法理解您的请求。",
+            "response": _extract_response(agent_output),
             "steps": steps
         }
 
@@ -263,6 +271,7 @@ async def get_agent_stream_response(
     thinking_queue = asyncio.Queue()
     agent_result_holder = {"response": None, "error": None}
     agent_done = asyncio.Event()
+    set_user_context(user_id=user_id, session_id=session_id)
     
     async def thinking_callback(data: dict):
         """思考过程回调函数，将事件放入队列"""
@@ -280,36 +289,18 @@ async def get_agent_stream_response(
             history = await sm.session_manager.get_history(session_id, user_id)
             logger.info(f"【Agent流式响应】获取会话历史成功，历史记录数: {len(history)}")
             
-            chat_history: List[BaseMessage] = []
-            if history:
-                from langchain_core.messages import HumanMessage, AIMessage
-                for user_msg, assistant_msg in history:
-                    chat_history.append(HumanMessage(content=user_msg))
-                    chat_history.append(AIMessage(content=assistant_msg))
-            
             agent_executor = agent_factory.create_agent_executor(custom_tools=custom_tools, **kwargs)
-            
-            full_response = []
-            tool_called = False
 
-            async for chunk in agent_executor.astream({
-                "input": query,
-                "chat_history": chat_history,
-                "system_prompt": agent_factory.default_system_prompt
-            }):
-                if "output" in chunk:
-                    full_response.append(chunk["output"])
-                elif "intermediate_steps" in chunk:
-                    for action, observation in chunk["intermediate_steps"]:
-                        tool_called = True
-                        logger.info(f"\n\n🧠 [Agent 思考] {action.log}")
-                        logger.info(f"🛠️ [调用工具] {action.tool}")
-                        logger.info(f"📥 [工具输入] {action.tool_input}")
-                        logger.info(f"📤 [工具结果] {observation}\n")
-            if not tool_called:
+            agent_output = await agent_executor.ainvoke({
+                "messages": _build_messages(query, history)
+            })
+            steps = _extract_steps(agent_output)
+            if not steps:
                 logger.info("【Agent流式响应】本轮未调用任何工具")
-            
-            agent_result_holder["response"] = "".join(full_response) if full_response else "抱歉，我无法理解您的请求。"
+            else:
+                _log_tool_steps("【Agent流式响应】", steps)
+
+            agent_result_holder["response"] = _extract_response(agent_output)
         except Exception as e:
             logger.error(f"【Agent流式响应】Agent执行失败: {e}", exc_info=True)
             agent_result_holder["error"] = str(e)

@@ -1,6 +1,9 @@
 from fastapi import Request, HTTPException
 
 from app.db.redis_config import connect_redis
+from app.core.logger_handler import get_logger
+
+logger = get_logger(__name__)
 
 
 def rate_limit(limit: int = 1, window: int = 60):
@@ -21,13 +24,14 @@ def rate_limit(limit: int = 1, window: int = 60):
 
         # 获取Redis连接
         redis = await connect_redis()
-        
+
         # 获取当前计数
         current = await redis.get(key)
         current = int(current) if current else 0
 
         if current >= limit:
             # 限流触发
+            logger.warning("接口限流触发 client_ip=%s key=%s current=%s limit=%s window=%s", client_ip, key, current, limit, window)
             raise HTTPException(
                 status_code=429,
                 detail="请求过于频繁，请稍后再试"
@@ -37,9 +41,11 @@ def rate_limit(limit: int = 1, window: int = 60):
         if current == 0:
             # 第一次请求，设置过期时间
             await redis.setex(key, window, 1)
+            logger.debug("接口限流计数初始化 key=%s limit=%s window=%s", key, limit, window)
         else:
             # 后续请求，增加计数
             await redis.incr(key)
+            logger.debug("接口限流计数增加 key=%s current=%s limit=%s", key, current + 1, limit)
 
     return dependency
 
@@ -60,7 +66,7 @@ class RateLimitMiddleware:
         # 构建请求对象
         from fastapi import Request
         request = Request(scope, receive)
-        
+
         # 获取客户端IP
         client_ip = request.client.host
         if not client_ip:
@@ -71,7 +77,7 @@ class RateLimitMiddleware:
 
         # 获取Redis连接
         redis = await connect_redis()
-        
+
         # 获取当前计数
         current = await redis.get(key)
         current = int(current) if current else 0
@@ -79,6 +85,7 @@ class RateLimitMiddleware:
         if current >= self.limit:
             # 限流触发
             from starlette.responses import JSONResponse
+            logger.warning("全局限流触发 client_ip=%s key=%s current=%s limit=%s window=%s", client_ip, key, current, self.limit, self.window)
             response = JSONResponse(
                 {"detail": "请求过于频繁，请稍后再试"},
                 status_code=429
@@ -90,8 +97,10 @@ class RateLimitMiddleware:
         if current == 0:
             # 第一次请求，设置过期时间
             await redis.setex(key, self.window, 1)
+            logger.debug("全局限流计数初始化 key=%s limit=%s window=%s", key, self.limit, self.window)
         else:
             # 后续请求，增加计数
             await redis.incr(key)
+            logger.debug("全局限流计数增加 key=%s current=%s limit=%s", key, current + 1, self.limit)
 
         await self.app(scope, receive, send)

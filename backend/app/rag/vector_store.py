@@ -71,10 +71,7 @@ class VectorStoreService:
         """
         try:
             if delete_documents:
-                await asyncio.to_thread(
-                    self.vectors_store.delete,
-                    where={"user_id": user_id}
-                )
+                await self.vectors_store.adelete(where={"user_id": user_id})
                 logger.info(f"【向量数据库】已删除用户 {user_id} 的所有文档")
 
             await self.md5_store.delete_user_md5(user_id)
@@ -99,10 +96,7 @@ class VectorStoreService:
 
             if delete_documents:
                 where_clause = {"$and": [{"user_id": user_id}, {"md5": md5_to_delete}]}
-                await asyncio.to_thread(
-                    self.vectors_store.delete,
-                    where=where_clause
-                )
+                await self.vectors_store.adelete(where=where_clause)
                 logger.info(f"【向量数据库】已删除用户 {user_id} 中文件 {filename} 对应的文档")
 
             return True
@@ -129,10 +123,7 @@ class VectorStoreService:
 
             if delete_documents:
                 where_clause = {"$and": [{"user_id": user_id}, {"md5": md5_to_delete}]}
-                await asyncio.to_thread(
-                    self.vectors_store.delete,
-                    where=where_clause
-                )
+                await self.vectors_store.adelete(where=where_clause)
                 logger.info(f"【向量数据库】已删除用户 {user_id} 中MD5为 {md5_to_delete} 的文档")
 
             return True
