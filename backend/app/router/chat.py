@@ -5,7 +5,7 @@ from fastapi.routing import APIRouter
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.agent.agent import get_agent_stream_response
+from app.agent.agent2 import get_agent_stream_response
 from app.router.chat_service import ChatService, get_router_service
 
 from app.schemas.models import QueryRequest, RAGResponse, RAGRequest, SessionResponse, ReorderResponse, ReorderRequest

@@ -1,10 +1,8 @@
 import asyncio
+import json
 import os
-from typing import List, Optional, AsyncGenerator
-
-from django.contrib.gis.db.backends.postgis.pgraster import chunk
+from typing import List, Optional
 from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
-from langchain_classic.schema.runnable import history
 from langchain_community.chat_models import ChatTongyi
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -167,7 +165,7 @@ async def get_agent_stream_response(
 ):
     thinking_queue = asyncio.Queue()
     agent_result_holder = {"response": None, "error": None}
-    agent_done = asyncio.Event
+    agent_done = asyncio.Event()
 
     async def thinking_callback(data: dict):
         await thinking_queue.put(data)
@@ -176,9 +174,9 @@ async def get_agent_stream_response(
 
         try:
             set_current_user_id(user_id)
-            set_thinking_callback(thinking_callback())
+            set_thinking_callback(thinking_callback)
 
-            history = session_manager.get_history(session_id, user_id)
+            history = await session_manager.session_manager.get_history(session_id, user_id)
 
             chat_history: List[BaseMessage] = []
 
@@ -216,7 +214,66 @@ async def get_agent_stream_response(
     yield f"agent已建立连接"
 
 
+    # 向前端发送思考数据
     while not agent_done.is_set():
-        pass
+        try:
+            event =  await asyncio.wait_for(thinking_queue.get(), timeout=0.1)
+            yield f"data:{json.dumps(event,ensure_ascii=False)}\n\n"
+            thinking_queue.task_done()
+        except asyncio.TimeoutError:
+            # 超时是正常的，继续等待
+            continue
+
+
+    # 保险措施: 把队列里的数据都推送给前端
+    while not thinking_queue.empty():
+        event = thinking_queue.get_nowait()
+        yield f"data: {json.dumps(event,ensure_ascii=False)}\n\n"
+        thinking_queue.task_done()
+
+
+    await agent_task
+
+    # 对话
+    if agent_result_holder["error"]:
+        error_message = agent_result_holder["error"]
+        yield f"data: {json.dumps({'type': 'error', 'content': error_message, 'session_id': session_id}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        return
+
+
+    response = agent_result_holder["response"]
+
+    # 添加历史记录
+    await session_manager.session_manager.add_message(session_id,user_id,query,response)
+    logger.info(f"[Agent流式相应] 添加到会话历史成功")
+
+    # 往前端推送回答
+    for char in response:
+        yield f"data: {json.dumps({'type': 'response', 'content': char}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(0.02)
+
+
+    # 发送结束标记
+    yield f"data: {json.dumps({'type': 'done', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+    logger.info(f"【Agent流式响应】处理完成，会话ID: {session_id}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
