@@ -11,15 +11,24 @@ from app.utils.auth_utils import decode_django_jwt
 import datetime
 
 current_user_id_var: ContextVar[str] = ContextVar('current_user_id', default=None)
+current_user_token_var: ContextVar[str] = ContextVar('current_user_token', default=None)
 thinking_callback_var: ContextVar[Optional[callable]] = ContextVar('thinking_callback', default=None)
 
 def set_current_user_id(user_id: str):
     """设置当前用户ID到上下文"""
     current_user_id_var.set(user_id)
 
+def set_current_user_token(token: str):
+    """设置当前用户JWT到上下文"""
+    current_user_token_var.set(token)
+
 def get_current_user_id_from_context() -> str:
     """从上下文获取当前用户ID"""
     return current_user_id_var.get()
+
+def get_current_user_token_from_context() -> str:
+    """从上下文获取当前用户JWT"""
+    return current_user_token_var.get()
 
 def set_thinking_callback(callback):
     """设置思考过程回调到上下文"""
@@ -62,10 +71,15 @@ async def reorder_documents_tools(query: str, documents: List[str]) -> str:
     else:
         return f"重排序失败: {result['error']}"
 
-@tool(description="当用户明确问自己的ID和用户名时，从JWT中获取当前用户ID和用户名，参数为完整的JWT token字符串")
-async def get_user_info_tools(token: str) -> str:
+@tool(description="当用户明确问自己的ID和用户名时，获取当前登录用户的用户ID和用户名。通常不需要用户额外提供JWT token，优先使用系统上下文中的当前JWT")
+async def get_user_info_tools(token: Optional[str] = None) -> str:
     """获取用户信息工具"""
-    payload = decode_django_jwt(token)
+    effective_token = token or get_current_user_token_from_context()
+    if not effective_token:
+        return "错误: 当前请求上下文中没有JWT token，无法获取用户信息"
+
+    logger.info("开始解析当前用户JWT以获取用户信息")
+    payload = decode_django_jwt(effective_token)
     if payload:
         user_id = payload.get("user_id", "未知")
         user_name = payload.get("user_name", "未知")
@@ -85,4 +99,25 @@ async def get_weather_tools(city: str = None) -> str:
 @tool(description="用于获取当前年月日时分的工具")
 async def what_time_is_now() -> str:
     """获取当前年月日时分的工具"""
-    return f"当前时间是：{datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}"
+    return f"当前时间是：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+
+@tool(description="用于获取某个款式的销售件数。需要提供款式编号（style），返回该款式的累计销售件数")
+async def get_sales_volume(style: str) -> str:
+    """根据款式编号查询销售件数"""
+    if not style or not style.strip():
+        return "错误：请提供款式编号"
+
+    mock_data = {
+        "1": {"name": "经典款", "sales": 1280},
+        "2": {"name": "时尚款", "sales": 856},
+        "3": {"name": "限定款", "sales": 320},
+    }
+
+    result = mock_data.get(style)
+    if result:
+        return f"款式 {style}（{result['name']}）的累计销售件数为：{result['sales']} 件"
+    else:
+        return f"未找到款式编号为「{style}」的销售数据，请确认款式编号是否正确"
+
+

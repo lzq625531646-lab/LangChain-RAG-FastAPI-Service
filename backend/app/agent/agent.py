@@ -13,7 +13,7 @@ from langchain_core.tools import BaseTool
 
 from app.agent.agent_middleware import get_middleware
 from app.agent.agent_tools import rag_summary_tools, get_weather_tools, what_time_is_now, get_user_info_tools, \
-    reorder_documents_tools, set_current_user_id, set_thinking_callback
+    reorder_documents_tools, set_current_user_id, set_current_user_token, set_thinking_callback, get_sales_volume
 from app.core.logger_handler import logger
 from app.services import session_manager as sm
 from app.utils.prompt_loader import load_prompt
@@ -58,6 +58,7 @@ class AgentFactory:
             what_time_is_now,
             get_user_info_tools,
             reorder_documents_tools,
+            get_sales_volume
         ]
 
     def _get_default_middleware(self) -> List:
@@ -170,6 +171,7 @@ async def get_agent_response(
         history: Optional[List[tuple]] = None,
         user_id: Optional[str] = None,
         custom_tools: Optional[List[BaseTool]] = None,
+        token: Optional[str] = None,
         **kwargs
 ):
     """
@@ -183,6 +185,8 @@ async def get_agent_response(
     """
     if user_id:
         set_current_user_id(user_id)
+    if token:
+        set_current_user_token(token)
 
     try:
         # 1. 从工厂获取全新的 Executor 实例
@@ -199,6 +203,7 @@ async def get_agent_response(
         # 3. 流式执行
         full_response = []
         steps = []
+        tool_called = False
         async for chunk in agent_executor.astream({
             "input": query,
             "chat_history": chat_history,
@@ -208,6 +213,7 @@ async def get_agent_response(
                 full_response.append(chunk["output"])
             elif "intermediate_steps" in chunk:
                 for action, observation in chunk["intermediate_steps"]:
+                    tool_called = True
                     # 记录日志
                     logger.info(f"\n\n🧠 [Agent 思考] {action.log}")
                     logger.info(f"🛠️ [调用工具] {action.tool}")
@@ -220,6 +226,8 @@ async def get_agent_response(
                         "tool_input": action.tool_input,
                         "tool_output": observation
                     })
+        if not tool_called:
+            logger.info("【Agent响应】本轮未调用任何工具")
 
         return {
             "response": "".join(full_response) if full_response else "抱歉，我无法理解您的请求。",
@@ -239,6 +247,7 @@ async def get_agent_stream_response(
         session_id: str,
         user_id: str,
         custom_tools: Optional[List[BaseTool]] = None,
+        token: Optional[str] = None,
         **kwargs
 ) -> AsyncGenerator[str, None]:
     """
@@ -264,6 +273,8 @@ async def get_agent_stream_response(
         """在独立任务中执行 Agent"""
         try:
             set_current_user_id(user_id)
+            if token:
+                set_current_user_token(token)
             set_thinking_callback(thinking_callback)
             
             history = await sm.session_manager.get_history(session_id, user_id)
@@ -279,7 +290,8 @@ async def get_agent_stream_response(
             agent_executor = agent_factory.create_agent_executor(custom_tools=custom_tools, **kwargs)
             
             full_response = []
-            
+            tool_called = False
+
             async for chunk in agent_executor.astream({
                 "input": query,
                 "chat_history": chat_history,
@@ -289,10 +301,13 @@ async def get_agent_stream_response(
                     full_response.append(chunk["output"])
                 elif "intermediate_steps" in chunk:
                     for action, observation in chunk["intermediate_steps"]:
+                        tool_called = True
                         logger.info(f"\n\n🧠 [Agent 思考] {action.log}")
                         logger.info(f"🛠️ [调用工具] {action.tool}")
                         logger.info(f"📥 [工具输入] {action.tool_input}")
                         logger.info(f"📤 [工具结果] {observation}\n")
+            if not tool_called:
+                logger.info("【Agent流式响应】本轮未调用任何工具")
             
             agent_result_holder["response"] = "".join(full_response) if full_response else "抱歉，我无法理解您的请求。"
         except Exception as e:

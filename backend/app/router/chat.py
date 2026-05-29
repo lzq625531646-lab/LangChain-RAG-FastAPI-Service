@@ -4,12 +4,13 @@ import uuid
 from fastapi.routing import APIRouter
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
-from app.agent.agent2 import get_agent_stream_response
+from app.agent.agent import get_agent_stream_response
 from app.router.chat_service import ChatService, get_router_service
 
 from app.schemas.models import QueryRequest, RAGResponse, RAGRequest, SessionResponse, ReorderResponse, ReorderRequest
-from app.utils.auth_utils import get_current_user_id
+from app.utils.auth_utils import get_current_user_id, security
 from app.core.success_response import success_response
 from app.core.rate_limit import rate_limit
 
@@ -21,13 +22,14 @@ chat_router = APIRouter(prefix="/chat", tags=["chat"])
 async def query_stream(
         request: QueryRequest,
         user_id: str = Depends(get_current_user_id),
+        credentials: HTTPAuthorizationCredentials = Depends(security),
         _: None = Depends(rate_limit(limit=10, window=60))
 ):
     """查询Agent流式响应"""
     session_id = request.session_id or str(uuid.uuid4())
 
     return StreamingResponse(
-        get_agent_stream_response(request.query, session_id, user_id),
+        get_agent_stream_response(request.query, session_id, user_id, token=credentials.credentials),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

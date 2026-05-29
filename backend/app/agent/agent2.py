@@ -211,8 +211,7 @@ async def get_agent_stream_response(
 
     agent_task = asyncio.create_task(run_agent())
 
-    yield f"agent已建立连接"
-
+    yield f"data: {json.dumps({'type': 'response', 'content': '', 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
     # 向前端发送思考数据
     while not agent_done.is_set():
