@@ -1,7 +1,6 @@
 import logging
 import logging.config
 import os
-from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any
 

@@ -148,13 +148,6 @@ class AgentFactory:
 agent_factory = AgentFactory()
 
 
-def get_agent_executor():
-    """
-    获取Agent Runnable实例，用于LangGraph
-    :return: Agent Runnable实例
-    """
-    return agent_factory.create_agent_executor()
-
 
 def _build_messages(query: str, history: Optional[List[tuple]] = None) -> List[BaseMessage]:
     """将项目里的二元组历史转换成 LangChain v1 messages 输入。"""
